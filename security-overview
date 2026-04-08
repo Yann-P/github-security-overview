@@ -93,6 +93,8 @@ def print_org(org, states):
             state_col = STATE_COLORS.get(state_val, "")
             state_str = f"{state_col}{state_val.ljust(10)}{RESET}"
             url = advisory.get("html_url", "")
+            url_base, _, url_id = url.rpartition("/")
+            url_fmt = f"{state_col}\033[2m{url_base}/\033[22m{url_id}{RESET}"
             days_ago = (
                 (
                     datetime.now(timezone.utc)
@@ -102,7 +104,7 @@ def print_org(org, states):
                 else "?"
             )
             print(
-                f"   {block(date)} {str(days_ago).rjust(4)}d  {title}  {state_str}   \033[2m{url}{RESET}"
+                f"   {block(date)} {str(days_ago).rjust(4)}d  {title}  {state_str}   {url_fmt}"
             )
 
 
