@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+import sys
+import argparse
+import subprocess
+import json
+from datetime import datetime, timezone
+
+ALL_STATES = ["published", "draft", "triage", "closed"]
+
+RESET = "\033[0m"
+BOLD = "\033[1m"
+
+STATE_COLORS = {
+    "draft": "\033[36m",  # cyan
+    "triage": "\033[33m",  # yellow
+    "published": "\033[32m",  # green
+    "closed": "\033[2m",  # grey
+}
+
+
+def plasma(t):
+    """Plasma color: t=0 → purple (old), t=1 → yellow (recent)."""
+    r = int(13 + (253 - 13) * t)
+    g = int(8 + (231 - 8) * t)
+    b = int(135 + (37 - 135) * t)
+    return f"\033[38;2;{r};{g};{b}m"
+
+
+def age_t(date_str):
+    dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    age = (datetime.now(timezone.utc) - dt).days
+    return max(0.0, 1.0 - age / 365)
+
+
+def block(date_str):
+    color = plasma(age_t(date_str)) if date_str else ""
+    return f"{color}█{RESET}"
+
+
+def check_gh():
+    if subprocess.run(["which", "gh"], capture_output=True).returncode != 0:
+        print("error: 'gh' not found in PATH", file=sys.stderr)
+        sys.exit(1)
+
+
+def fetch(org, state):
+    r = subprocess.run(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"/orgs/{org}/security-advisories?state={state}&per_page=100",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        print(f"[error] {org} ({state}): {r.stderr.strip()}", file=sys.stderr)
+        return []
+    try:
+        return json.loads(r.stdout) if r.stdout.strip() else []
+    except json.JSONDecodeError:
+        return []
+
+
+def print_org(org, states):
+    advisories = []
+    for state in states:
+        advisories.extend(fetch(org, state))
+    print(f"\n{BOLD}=== {org} ==={RESET}")
+    if not advisories:
+        print("  (no advisories)")
+        return
+
+    by_repo = {}
+    for advisory in advisories:
+        repo = (advisory.get("html_url") or "").split("/")[4] or "unknown"
+        by_repo.setdefault(repo, []).append(advisory)
+
+    advisories_by_repo = sorted(
+        by_repo.items(),
+        key=lambda x: max(a.get("updated_at", "") for a in x[1]),
+        reverse=True,
+    )
+
+    for repo, items in advisories_by_repo:
+        items = sorted(items, key=lambda a: a.get("updated_at", ""), reverse=True)
+        print(f"{repo}")
+        for advisory in items:
+            date = advisory.get("updated_at", "")
+            title = (advisory.get("summary") or "")[:50].ljust(50)
+            state_val = advisory.get("state") or "?"
+            state_col = STATE_COLORS.get(state_val, "")
+            state_str = f"{state_col}{state_val.ljust(10)}{RESET}"
+            url = advisory.get("html_url", "")
+            days_ago = (
+                (
+                    datetime.now(timezone.utc)
+                    - datetime.fromisoformat(date.replace("Z", "+00:00"))
+                ).days
+                if date
+                else "?"
+            )
+            print(
+                f"   {block(date)} {str(days_ago).rjust(4)}d  {title}  {state_str}   \033[2m{url}{RESET}"
+            )
+
+
+def main():
+    check_gh()
+    parser = argparse.ArgumentParser(prog="security-overview")
+    parser.add_argument("orgs", nargs="+", metavar="org")
+    parser.add_argument(
+        "--state",
+        choices=ALL_STATES,
+        action="append",
+        metavar="STATE",
+        help="filter by state (repeatable, default: all states)",
+    )
+    args = parser.parse_args()
+    states = args.state or ALL_STATES
+    for org in args.orgs:
+        print_org(org, states)
+    print()
+
+
+if __name__ == "__main__":
+    main()
