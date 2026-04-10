@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
+import os
 import sys
 import argparse
-import subprocess
 import json
 from datetime import datetime, timezone
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 
 ALL_STATES = ["published", "draft", "triage", "closed"]
 
@@ -37,36 +40,71 @@ def block(date_str):
     return f"{color}█{RESET}"
 
 
-def check_gh():
-    if subprocess.run(["which", "gh"], capture_output=True).returncode != 0:
-        print("error: 'gh' not found in PATH", file=sys.stderr)
+GITHUB_API = "https://api.github.com"
+
+
+def check_token():
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        print("error: GITHUB_TOKEN environment variable not set", file=sys.stderr)
         sys.exit(1)
+    return token
 
 
-def fetch(org, state):
-    r = subprocess.run(
-        [
-            "gh",
-            "api",
-            "--paginate",
-            f"/orgs/{org}/security-advisories?state={state}&per_page=100",
-        ],
-        capture_output=True,
-        text=True,
+def parse_next_link(link_header):
+    """Parse RFC 5988 Link header and return the 'next' URL, or None."""
+    if not link_header:
+        return None
+    for part in link_header.split(","):
+        segments = part.strip().split(";")
+        if len(segments) < 2:
+            continue
+        url = segments[0].strip().lstrip("<").rstrip(">")
+        for seg in segments[1:]:
+            if seg.strip() == 'rel="next"':
+                return url
+    return None
+
+
+def fetch(org, state, token):
+    url = (
+        f"{GITHUB_API}/orgs/{org}/security-advisories"
+        f"?{urlencode({'state': state, 'per_page': 100})}"
     )
-    if r.returncode != 0:
-        print(f"[error] {org} ({state}): {r.stderr.strip()}", file=sys.stderr)
-        return []
-    try:
-        return json.loads(r.stdout) if r.stdout.strip() else []
-    except json.JSONDecodeError:
-        return []
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2026-03-10",
+        "User-Agent": "security-overview",
+    }
+    results = []
+    while url:
+        print(f"[GET] {url}", file=sys.stderr)
+        try:
+            with urlopen(Request(url, headers=headers)) as resp:
+                body = resp.read().decode("utf-8")
+                link = resp.headers.get("Link")
+        except HTTPError as e:
+            msg = e.read().decode("utf-8", errors="replace").strip()
+            print(f"[error] {org} ({state}): HTTP {e.code} {msg}", file=sys.stderr)
+            return results
+        except URLError as e:
+            print(f"[error] {org} ({state}): {e.reason}", file=sys.stderr)
+            return results
+        try:
+            page = json.loads(body) if body.strip() else []
+        except json.JSONDecodeError:
+            return results
+        if isinstance(page, list):
+            results.extend(page)
+        url = parse_next_link(link)
+    return results
 
 
-def print_org(org, states):
+def print_org(org, states, token):
     advisories = []
     for state in states:
-        advisories.extend(fetch(org, state))
+        advisories.extend(fetch(org, state, token))
     print(f"\n{BOLD}=== {org} ==={RESET}")
     if not advisories:
         print("  (no advisories)")
@@ -109,7 +147,7 @@ def print_org(org, states):
 
 
 def main():
-    check_gh()
+    token = check_token()
     parser = argparse.ArgumentParser(prog="security-overview")
     parser.add_argument("orgs", nargs="+", metavar="org")
     parser.add_argument(
@@ -122,7 +160,7 @@ def main():
     args = parser.parse_args()
     states = args.state or ALL_STATES
     for org in args.orgs:
-        print_org(org, states)
+        print_org(org, states, token)
     print()
 
 
