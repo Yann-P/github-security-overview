@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
+import argparse
 import os
 import sys
-import argparse
 from datetime import datetime, timezone
 
 import httpx
@@ -11,21 +11,36 @@ ALL_STATES = ["published", "draft", "triage", "closed"]
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
+GREY = "\033[2m"
 
 STATE_COLORS = {
-    "draft": "\033[36m",  # cyan
-    "triage": "\033[33m",  # yellow
+    "draft":     "\033[36m",  # cyan
+    "triage":    "\033[33m",  # yellow
     "published": "\033[32m",  # green
-    "closed": "\033[2m",  # grey
+    "closed":    GREY,
+}
+
+PR_STATE_COLORS = {
+    "open":   "\033[32m",  # green
+    "merged": "\033[35m",  # purple
+    "closed": "\033[31m",  # red
 }
 
 
-def plasma(t):
+def pr_state(pull):
+    if pull is None:
+        return None
+    if pull.get("merged_at"):
+        return "merged"
+    return pull.get("state", "?")  # "open" or "closed"
+
+
+def plasma_rgb(t):
     """Plasma color: t=0 → purple (old), t=1 → yellow (recent)."""
     r = int(13 + (253 - 13) * t)
     g = int(8 + (231 - 8) * t)
     b = int(135 + (37 - 135) * t)
-    return f"\033[38;2;{r};{g};{b}m"
+    return r, g, b
 
 
 def age_t(date_str):
@@ -34,9 +49,14 @@ def age_t(date_str):
     return max(0.0, 1.0 - age / 365)
 
 
-def block(date_str):
-    color = plasma(age_t(date_str)) if date_str else ""
-    return f"{color}█{RESET}"
+def age_badge(date_str, text):
+    """Render text on a plasma background; foreground chosen for legibility."""
+    t = age_t(date_str) if date_str else 0.0
+    r, g, b = plasma_rgb(t)
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    fg = "\033[30m" if luminance > 128 else "\033[97m"
+    bg = f"\033[48;2;{r};{g};{b}m"
+    return f"{bg}{fg}{text}{RESET}"
 
 
 def redact_str(s):
@@ -53,6 +73,23 @@ def check_token():
         print("error: GITHUB_TOKEN environment variable not set", file=sys.stderr)
         sys.exit(1)
     return token
+
+
+async def fetch_first_pull(client, fork_html_url, results):
+    """Fetch the first pull request (by creation date) for a private fork repo."""
+    path = fork_html_url.split("github.com/", 1)[-1].rstrip("/")
+    url = f"{GITHUB_API}/repos/{path}/pulls"
+    params = {"per_page": 1, "state": "all", "sort": "created", "direction": "asc"}
+    try:
+        req = client.build_request("GET", url, params=params)
+        resp = await client.send(req)
+        if resp.status_code == 200:
+            pulls = resp.json()
+            results[fork_html_url] = pulls[0] if pulls else None
+        else:
+            results[fork_html_url] = None
+    except httpx.HTTPError:
+        results[fork_html_url] = None
 
 
 async def fetch(client, org, state, results):
@@ -85,12 +122,19 @@ async def fetch(client, org, state, results):
     results[(org, state)] = advisories
 
 
-def print_org(org, states, results_by_key, redact=False):
+def link(text, target):
+    return f"\033[4m\033]8;;{target}\033\\{text}\033]8;;\033\\\033[24m"
+
+
+def color(text, color):
+    return f"{color}{text}{RESET}"
+
+
+def print_org(org, states, results_by_key, pull_results=None, redact=False):
     advisories = []
     for state in states:
         advisories.extend(results_by_key.get((org, state), []))
-    if not redact:
-        print(f"\n{BOLD}=== {org} ==={RESET}")
+    print(f"\n{BOLD}=== {org if not redact else 'REDACTED ORG'} ==={RESET}")
     if not advisories:
         if not redact:
             print("  (no advisories)")
@@ -109,29 +153,27 @@ def print_org(org, states, results_by_key, redact=False):
 
     for repo, items in advisories_by_repo:
         items = sorted(items, key=lambda a: a.get("updated_at", ""), reverse=True)
-        if not redact:
-            print(f"{repo}")
+        print(f"{BOLD}{repo if not redact else 'REDACTED REPO'}{RESET}")
         for advisory in items:
-            date = advisory.get("updated_at", "")
-            title = (advisory.get("summary") or "")[:50].ljust(50)
-            state_val = advisory.get("state") or "?"
-            state_col = STATE_COLORS.get(state_val, "")
-            state_str = f"{state_col}{state_val.ljust(10)}{RESET}"
+            id = advisory.get("ghsa_id", "") if not redact else "GHSA-xxxx-yyyy-zzzz"
             url = advisory.get("html_url", "")
-            url_base, _, url_id = url.rpartition("/")
-            if redact:
-                # replace org/repo slugs in the URL with literal ORG/REPO
-                parts = url_base.split("/")
-                if len(parts) >= 5:
-                    parts[3] = "ORG"
-                    parts[4] = "REPO"
-                url_base = "/".join(parts)
-                # GHSA-xxxx-yyyy-zzzz → keep "GHSA-" prefix, hide the random bits
-                if url_id.startswith("GHSA-"):
-                    url_id = "GHSA-" + redact_str(url_id[5:])
-                else:
-                    url_id = redact_str(url_id)
-            url_fmt = f"{state_col}\033[2m{url_base}/\033[22m{url_id}{RESET}"
+            date = advisory.get("updated_at", "")
+            title = (advisory.get("summary") or "")[:40].ljust(40)
+            state_val = advisory.get("state") or "?"
+            state_str = color(state_val.ljust(9), STATE_COLORS.get(state_val, ""))
+            cve = advisory.get("cve_id") or ""
+            fork = advisory.get("private_fork")
+            fork_html_url = fork.get("html_url") if fork else None
+            cve_str = cve[:15].ljust(15)
+            cve_str = color(cve_str, GREY)
+            first_pull = (
+                (pull_results or {}).get(fork_html_url) if fork_html_url else None
+            )
+            ps = pr_state(first_pull)
+            pull_str = (
+                color(link("PR " + ps.ljust(6), first_pull["html_url"]), PR_STATE_COLORS.get(ps, GREY))
+                if first_pull else " " * 9
+            )
             days_ago = (
                 (
                     datetime.now(timezone.utc)
@@ -140,13 +182,14 @@ def print_org(org, states, results_by_key, redact=False):
                 if date
                 else "?"
             )
+            badge = age_badge(date, (str(days_ago) + 'd').rjust(5))
             if redact:
                 print(
-                    f"   {block(date)} {str(days_ago).rjust(4)}d  {state_str}   {url_fmt}"
+                    f" {badge}\t{link(id, url)}  {state_str}"
                 )
             else:
                 print(
-                    f"   {block(date)} {str(days_ago).rjust(4)}d  {title}  {state_str}   {url_fmt}"
+                    f" {badge}\t{state_str}  {color(link(id, url), GREY)}  {title}  {cve_str}  {pull_str}"
                 )
 
 
@@ -188,14 +231,25 @@ async def main():
     }
 
     results = {}
+    pull_results = {}
     async with httpx.AsyncClient(headers=headers, timeout=30.0) as client:
         async with trio.open_nursery() as nursery:
             for org in args.orgs:
                 for state in states:
                     nursery.start_soon(fetch, client, org, state, results)
 
+        fork_urls = {
+            advisory["private_fork"]["html_url"]
+            for advisories in results.values()
+            for advisory in advisories
+            if advisory.get("private_fork") and advisory["private_fork"].get("html_url")
+        }
+        async with trio.open_nursery() as nursery:
+            for fork_url in fork_urls:
+                nursery.start_soon(fetch_first_pull, client, fork_url, pull_results)
+
     for org in args.orgs:
-        print_org(org, states, results, redact=args.redact)
+        print_org(org, states, results, pull_results=pull_results, redact=args.redact)
     print()
 
 
