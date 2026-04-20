@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+import os
 import sys
 import argparse
-import subprocess
-import json
 from datetime import datetime, timezone
+
+import httpx
+import trio
 
 ALL_STATES = ["published", "draft", "triage", "closed"]
 
@@ -37,39 +39,61 @@ def block(date_str):
     return f"{color}█{RESET}"
 
 
-def check_gh():
-    if subprocess.run(["which", "gh"], capture_output=True).returncode != 0:
-        print("error: 'gh' not found in PATH", file=sys.stderr)
+def redact_str(s):
+    """Replace alphanumeric characters with '•', preserving spaces and punctuation."""
+    return "".join("•" if c.isalnum() else c for c in s)
+
+
+GITHUB_API = "https://api.github.com"
+
+
+def check_token():
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        print("error: GITHUB_TOKEN environment variable not set", file=sys.stderr)
         sys.exit(1)
+    return token
 
 
-def fetch(org, state):
-    r = subprocess.run(
-        [
-            "gh",
-            "api",
-            "--paginate",
-            f"/orgs/{org}/security-advisories?state={state}&per_page=100",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if r.returncode != 0:
-        print(f"[error] {org} ({state}): {r.stderr.strip()}", file=sys.stderr)
-        return []
-    try:
-        return json.loads(r.stdout) if r.stdout.strip() else []
-    except json.JSONDecodeError:
-        return []
+async def fetch(client, org, state, results):
+    """Fetch all advisories for (org, state), following pagination, storing in results[(org, state)]."""
+    url = f"{GITHUB_API}/orgs/{org}/security-advisories"
+    params = {"state": state, "per_page": 100}
+    advisories = []
+    while url is not None:
+        try:
+            req = client.build_request("GET", url, params=params)
+            resp = await client.send(req)
+        except httpx.HTTPError as e:
+            print(f"[error] {org} ({state}): {e}", file=sys.stderr)
+            break
+        if resp.status_code != 200:
+            print(
+                f"[error] {org} ({state}): HTTP {resp.status_code} {resp.text.strip()}",
+                file=sys.stderr,
+            )
+            break
+        try:
+            page = resp.json()
+        except ValueError:
+            break
+        if isinstance(page, list):
+            advisories.extend(page)
+        next_link = resp.links.get("next")
+        url = next_link["url"] if next_link else None
+        params = None  # next URL already has the pagination cursor
+    results[(org, state)] = advisories
 
 
-def print_org(org, states):
+def print_org(org, states, results_by_key, redact=False):
     advisories = []
     for state in states:
-        advisories.extend(fetch(org, state))
-    print(f"\n{BOLD}=== {org} ==={RESET}")
+        advisories.extend(results_by_key.get((org, state), []))
+    if not redact:
+        print(f"\n{BOLD}=== {org} ==={RESET}")
     if not advisories:
-        print("  (no advisories)")
+        if not redact:
+            print("  (no advisories)")
         return
 
     by_repo = {}
@@ -85,7 +109,8 @@ def print_org(org, states):
 
     for repo, items in advisories_by_repo:
         items = sorted(items, key=lambda a: a.get("updated_at", ""), reverse=True)
-        print(f"{repo}")
+        if not redact:
+            print(f"{repo}")
         for advisory in items:
             date = advisory.get("updated_at", "")
             title = (advisory.get("summary") or "")[:50].ljust(50)
@@ -94,6 +119,18 @@ def print_org(org, states):
             state_str = f"{state_col}{state_val.ljust(10)}{RESET}"
             url = advisory.get("html_url", "")
             url_base, _, url_id = url.rpartition("/")
+            if redact:
+                # replace org/repo slugs in the URL with literal ORG/REPO
+                parts = url_base.split("/")
+                if len(parts) >= 5:
+                    parts[3] = "ORG"
+                    parts[4] = "REPO"
+                url_base = "/".join(parts)
+                # GHSA-xxxx-yyyy-zzzz → keep "GHSA-" prefix, hide the random bits
+                if url_id.startswith("GHSA-"):
+                    url_id = "GHSA-" + redact_str(url_id[5:])
+                else:
+                    url_id = redact_str(url_id)
             url_fmt = f"{state_col}\033[2m{url_base}/\033[22m{url_id}{RESET}"
             days_ago = (
                 (
@@ -103,28 +140,64 @@ def print_org(org, states):
                 if date
                 else "?"
             )
-            print(
-                f"   {block(date)} {str(days_ago).rjust(4)}d  {title}  {state_str}   {url_fmt}"
+            if redact:
+                print(
+                    f"   {block(date)} {str(days_ago).rjust(4)}d  {state_str}   {url_fmt}"
+                )
+            else:
+                print(
+                    f"   {block(date)} {str(days_ago).rjust(4)}d  {title}  {state_str}   {url_fmt}"
+                )
+
+
+def parse_states(value):
+    """Accept a comma-separated list of states; validate each against ALL_STATES."""
+    states = [s.strip() for s in value.split(",") if s.strip()]
+    for s in states:
+        if s not in ALL_STATES:
+            raise argparse.ArgumentTypeError(
+                f"invalid state {s!r} (choose from {', '.join(ALL_STATES)})"
             )
+    return states
 
 
-def main():
-    check_gh()
+async def main():
+    token = check_token()
     parser = argparse.ArgumentParser(prog="security-overview")
     parser.add_argument("orgs", nargs="+", metavar="org")
     parser.add_argument(
         "--state",
-        choices=ALL_STATES,
+        type=parse_states,
         action="append",
-        metavar="STATE",
-        help="filter by state (repeatable, default: all states)",
+        metavar="STATE[,STATE...]",
+        help="filter by state; repeatable and/or comma-separated (default: all states)",
+    )
+    parser.add_argument(
+        "--redact",
+        action="store_true",
+        help="hide org/repo names (as ORG/REPO), GHSA random chars, and drop title + headers",
     )
     args = parser.parse_args()
-    states = args.state or ALL_STATES
+    states = [s for group in (args.state or []) for s in group] or ALL_STATES
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2026-03-10",
+        "User-Agent": "security-overview",
+    }
+
+    results = {}
+    async with httpx.AsyncClient(headers=headers, timeout=30.0) as client:
+        async with trio.open_nursery() as nursery:
+            for org in args.orgs:
+                for state in states:
+                    nursery.start_soon(fetch, client, org, state, results)
+
     for org in args.orgs:
-        print_org(org, states)
+        print_org(org, states, results, redact=args.redact)
     print()
 
 
 if __name__ == "__main__":
-    main()
+    trio.run(main)
