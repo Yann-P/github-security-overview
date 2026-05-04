@@ -1,0 +1,8 @@
+.claude
+.vscode
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+*.egg-info
+task*.md
