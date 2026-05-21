@@ -1,4 +1,4 @@
-# github-security-overview
+# 🐴 github-security-overview
 
 Aggregates and prints all github security advisories from all repos belonging to the input github organization(s).
 
