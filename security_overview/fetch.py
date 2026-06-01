@@ -14,20 +14,19 @@ def check_token():
     return token
 
 
-async def fetch_first_pull(client, fork_html_url, results):
+async def fetch_pulls(client, fork_html_url, results):
     path = fork_html_url.split("github.com/", 1)[-1].rstrip("/")
     url = f"{GITHUB_API}/repos/{path}/pulls"
-    params = {"per_page": 1, "state": "all", "sort": "created", "direction": "asc"}
+    params = {"per_page": 100, "state": "all", "sort": "created", "direction": "asc"}
     try:
         req = client.build_request("GET", url, params=params)
         resp = await client.send(req)
         if resp.status_code == 200:
-            pulls = resp.json()
-            results[fork_html_url] = pulls[0] if pulls else None
+            results[fork_html_url] = resp.json()
         else:
-            results[fork_html_url] = None
+            results[fork_html_url] = []
     except httpx.HTTPError:
-        results[fork_html_url] = None
+        results[fork_html_url] = []
 
 
 async def fetch(client, org, state, results):

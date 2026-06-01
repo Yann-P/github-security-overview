@@ -24,14 +24,60 @@ def test_repo_name():
     assert "repo-x" in out
 
 
-def test_ghsa_id_present():
+def test_title_linked():
     out = render_terminal.render_org(ORG, STATES, RESULTS)
-    assert "GHSA-1234-5678-abcd" in out
+    assert "Remote code execution via evil input" in out
+    assert ADVISORY["html_url"] in out
 
 
 def test_no_advisories():
     out = render_terminal.render_org(ORG, STATES, {})
-    assert "(no advisories)" in out
+    assert out == ""
+
+
+def test_tree_connector_single():
+    out = render_terminal.render_org(ORG, STATES, RESULTS)
+    assert "└── " in out
+
+
+def test_tree_connector_multiple():
+    results = {
+        (ORG, "draft"): [
+            ADVISORY,
+            {**ADVISORY, "ghsa_id": "GHSA-aaaa-bbbb-cccc", "updated_at": "2024-05-01T00:00:00Z"},
+        ]
+    }
+    out = render_terminal.render_org(ORG, STATES, results)
+    assert "├── " in out
+    assert "└── " in out
+
+
+def test_cve_on_sub_line():
+    out = render_terminal.render_org(ORG, STATES, RESULTS)
+    lines = out.splitlines()
+    cve_line = next(l for l in lines if "CVE-2024-9999" in l)
+    assert "└── " in cve_line
+    assert "nvd.nist.gov" in cve_line
+
+
+def test_pr_on_sub_line():
+    results = {
+        (ORG, "draft"): [{
+            **ADVISORY,
+            "private_fork": {"html_url": "https://github.com/acme/repo-x-private"},
+        }]
+    }
+    pull_results = {
+        "https://github.com/acme/repo-x-private": [
+            {"number": 7, "html_url": "https://github.com/acme/repo-x-private/pull/7",
+             "state": "open", "merged_at": None},
+        ]
+    }
+    out = render_terminal.render_org(ORG, STATES, results, pull_results=pull_results)
+    lines = out.splitlines()
+    sub_line = next(l for l in lines if "#7" in l)
+    assert "opened" in sub_line
+    assert "└── " in sub_line
 
 
 def test_redact_hides_org():
@@ -45,7 +91,7 @@ def test_redact_hides_repo():
     assert "repo-x" not in out
 
 
-def test_redact_masks_ghsa():
+def test_redact_hides_title():
     out = render_terminal.render_org(ORG, STATES, RESULTS, redact=True)
-    assert "GHSA-xxxx-yyyy-zzzz" in out
-    assert "GHSA-1234-5678-abcd" not in out
+    assert "Remote code execution" not in out
+    assert ADVISORY["html_url"] not in out

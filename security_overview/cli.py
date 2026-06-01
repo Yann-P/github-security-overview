@@ -5,7 +5,7 @@ import trio
 
 from . import render_md, render_terminal
 from .constants import ALL_STATES
-from .fetch import check_token, fetch, fetch_first_pull
+from .fetch import check_token, fetch, fetch_pulls
 
 RENDERERS = {
     "terminal": render_terminal,
@@ -72,8 +72,15 @@ async def main():
         }
         async with trio.open_nursery() as nursery:
             for fork_url in fork_urls:
-                nursery.start_soon(fetch_first_pull, client, fork_url, pull_results)
+                nursery.start_soon(fetch_pulls, client, fork_url, pull_results)
 
     for org in args.orgs:
-        print(renderer.render_org(org, states, results, pull_results=pull_results, redact=args.redact))
+        out = renderer.render_org(org, states, results, pull_results=pull_results, redact=args.redact)
+        if out:
+            print(out)
     print()
+
+
+def run():
+    """Synchronous console-script entry point."""
+    trio.run(main)

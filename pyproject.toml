@@ -5,11 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "security-overview"
 version = "0.1.0"
+description = "Overview of GitHub security advisories across orgs"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["httpx", "trio"]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-trio", "respx"]
+
+[project.scripts]
+security-overview = "security_overview.cli:run"
 
 [tool.setuptools.packages.find]
 where = ["."]
