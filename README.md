@@ -1,53 +1,56 @@
 # github-security-overview
 
-Aggregates and prints all github security advisories from all repos belonging to the input github organization(s).
+Print all GitHub security advisories across one or more GitHub organizations, one advisory per line.
 
-# Why
-
-Because github has no aggregated view for security advisories across repositories.
-
-# Example output
-
-```
-$ ./security-overview acme
-
-=== acme ===
-repo-a
-      0d  Arbitrary File Read via Path Traversal            draft      https://github.com/acme/repo-a/security/advisories/GHSA-xxxx-xxxx-xxxx
-      0d  Arbitrary File Write via Path Traversal           draft      https://github.com/acme/repo-a/security/advisories/GHSA-xxxx-xxxx-xxxx
-     12d  XSS when output is exported as HTML               draft      https://github.com/acme/repo-a/security/advisories/GHSA-xxxx-xxxx-xxxx
-repo-b
-    107d  Path Traversal in Assignment Validation           draft      https://github.com/acme/repo-b/security/advisories/GHSA-xxxx-xxxx-xxxx
-repo-c
-    116d  Authentication Token Theft via XSS                triage     https://github.com/acme/repo-c/security/advisories/GHSA-xxxx-xxxx-xxxx
-    181d  Open redirect via untrusted user input            triage     https://github.com/acme/repo-c/security/advisories/GHSA-xxxx-xxxx-xxxx
-    232d  Pwn Request via misconfigured workflow            draft      https://github.com/acme/repo-c/security/advisories/GHSA-xxxx-xxxx-xxxx
-    454d  XSS via mermaid chart rendering                   draft      https://github.com/acme/repo-c/security/advisories/GHSA-xxxx-xxxx-xxxx
-    624d  DOM Clobbering XSS                                draft      https://github.com/acme/repo-c/security/advisories/GHSA-xxxx-xxxx-xxxx
-    638d  Arbitrary file overwrite on extension install     triage     https://github.com/acme/repo-c/security/advisories/GHSA-xxxx-xxxx-xxxx
+```bash
+pip install .
+GITHUB_TOKEN=ghp_... security-overview org1 [org2 ...]
 ```
 
-# Run it
+The token needs `security_events` read access.
 
-- Install [Github CLI](https://cli.github.com/) and `gh auth login`
-
-- `curl -fsSL https://raw.githubusercontent.com/Yann-P/github-security-overview/main/security-overview | python3 - org1 [org2]`
-
-# Usage 
+## Example
 
 ```
-./security-overview org1 [org2] ... [org𝑛]
-./security-overview --state draft --state triage org1 [org2] ... [org𝑛]
+$ security-overview acme
+created  updated  to-publish  state      org   repo    cve            title
+     12        0              draft      acme  repo-a  CVE-2026-xxxx  Arbitrary File Read via Path Traversal
+    232        9           6  published  acme  repo-c  CVE-2025-xxxx  Pwn Request via misconfigured workflow
+    233      107              draft      acme  repo-b                 Path Traversal in Assignment Validation  PRs: #7 (opened)
+    116      116              triage     acme  repo-c                 Authentication Token Theft via XSS
 ```
 
-# Architecture principles
+Ages are in days; `to-publish` is the time from open to publication. The header goes to
+stderr, and when stdout is piped the columns are tab-separated — so `wc -l` counts
+advisories and `awk`/`cut`/`datamash` work directly, e.g. `security-overview acme | datamash --narm median 3`.
 
-- No python dependencies
+## Options
 
-# Roadmap
+```
+usage: security-overview [-h] [--state STATE[,STATE...]] [--redact]
+                         [--format {terminal,md}] [--opened-from YYYY-MM-DD]
+                         [--opened-to YYYY-MM-DD]
+                         [--published-from YYYY-MM-DD]
+                         [--published-to YYYY-MM-DD]
+                         org [org ...]
 
-- [x] color-coded full black character at the start of the line using plasma color range (yellow-purple) depending on last update date
+options:
+  -h, --help            show this help message and exit
+  --state STATE[,STATE...]
+                        filter by state; repeatable and/or comma-separated
+                        (default: all states)
+  --redact              hide org/repo names, GHSA random chars, and drop title
+                        + headers
+  --format {terminal,md}
+                        output format (default: terminal)
+  --opened-from YYYY-MM-DD
+                        only advisories opened on or after this date
+  --opened-to YYYY-MM-DD
+                        only advisories opened on or before this date
+  --published-from YYYY-MM-DD
+                        only advisories published on or after this date
+  --published-to YYYY-MM-DD
+                        only advisories published on or before this date
+```
 
-# Licence
-
-MIT 
+MIT licence.

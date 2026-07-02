@@ -1,4 +1,7 @@
 import argparse
+import os
+import sys
+from datetime import date
 
 import httpx
 import trio
@@ -23,6 +26,35 @@ def parse_states(value):
     return states
 
 
+def parse_date(value):
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid date {value!r} (expected YYYY-MM-DD)")
+    return value
+
+
+def filter_date_range(results, field, date_from, date_to):
+    """Keep advisories whose `field` date falls in [date_from, date_to] (inclusive).
+
+    Advisories missing the field (e.g. never published) are dropped when a bound is set.
+    """
+    if not date_from and not date_to:
+        return results
+
+    def keep(advisory):
+        value = (advisory.get(field) or "")[:10]
+        if not value:
+            return False
+        if date_from and value < date_from:
+            return False
+        if date_to and value > date_to:
+            return False
+        return True
+
+    return {key: [a for a in advisories if keep(a)] for key, advisories in results.items()}
+
+
 async def main():
     token = check_token()
     parser = argparse.ArgumentParser(prog="security-overview")
@@ -45,6 +77,30 @@ async def main():
         default="terminal",
         help="output format (default: terminal)",
     )
+    parser.add_argument(
+        "--opened-from",
+        type=parse_date,
+        metavar="YYYY-MM-DD",
+        help="only advisories opened on or after this date",
+    )
+    parser.add_argument(
+        "--opened-to",
+        type=parse_date,
+        metavar="YYYY-MM-DD",
+        help="only advisories opened on or before this date",
+    )
+    parser.add_argument(
+        "--published-from",
+        type=parse_date,
+        metavar="YYYY-MM-DD",
+        help="only advisories published on or after this date",
+    )
+    parser.add_argument(
+        "--published-to",
+        type=parse_date,
+        metavar="YYYY-MM-DD",
+        help="only advisories published on or before this date",
+    )
     args = parser.parse_args()
     states = [s for group in (args.state or []) for s in group] or ALL_STATES
     renderer = RENDERERS[args.format]
@@ -64,6 +120,9 @@ async def main():
                 for state in states:
                     nursery.start_soon(fetch, client, org, state, results)
 
+        results = filter_date_range(results, "created_at", args.opened_from, args.opened_to)
+        results = filter_date_range(results, "published_at", args.published_from, args.published_to)
+
         fork_urls = {
             advisory["private_fork"]["html_url"]
             for advisories in results.values()
@@ -74,13 +133,28 @@ async def main():
             for fork_url in fork_urls:
                 nursery.start_soon(fetch_pulls, client, fork_url, pull_results)
 
+    render_kwargs = {"pull_results": pull_results, "redact": args.redact}
+    if args.format == "terminal":
+        # tab-separated plain output when piped, so cut/awk/datamash can parse it
+        plain = not sys.stdout.isatty()
+        render_kwargs["plain"] = plain
+        # headers go to stderr so stdout stays 1 line = 1 advisory
+        print(render_terminal.header(redact=args.redact, plain=plain), file=sys.stderr)
     for org in args.orgs:
-        out = renderer.render_org(org, states, results, pull_results=pull_results, redact=args.redact)
+        out = renderer.render_org(org, states, results, **render_kwargs)
         if out:
             print(out)
-    print()
+    # terminal format stays 1 line = 1 advisory so `wc -l` counts vulns
+    if args.format == "md":
+        print()
 
 
 def run():
     """Synchronous console-script entry point."""
-    trio.run(main)
+    try:
+        trio.run(main)
+    except BrokenPipeError:
+        # downstream closed the pipe (e.g. `| head`); redirect stdout to
+        # devnull so the interpreter's exit flush doesn't error too
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(141)  # 128 + SIGPIPE

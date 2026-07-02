@@ -22,6 +22,14 @@ def age_t(date_str):
     return max(0.0, 1.0 - age / 365)
 
 
+def days_between(start_str, end_str):
+    if not start_str or not end_str:
+        return None
+    start = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+    end = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+    return (end - start).days
+
+
 def days_ago(date_str):
     if not date_str:
         return "?"
@@ -31,11 +39,15 @@ def days_ago(date_str):
     ).days
 
 
+def repo_name(advisory):
+    parts = (advisory.get("html_url") or "").split("/")
+    return parts[4] if len(parts) > 4 else "unknown"
+
+
 def group_by_repo(advisories):
     by_repo = {}
     for advisory in advisories:
-        repo = (advisory.get("html_url") or "").split("/")[4] or "unknown"
-        by_repo.setdefault(repo, []).append(advisory)
+        by_repo.setdefault(repo_name(advisory), []).append(advisory)
     return sorted(
         by_repo.items(),
         key=lambda x: max(a.get("updated_at", "") for a in x[1]),
