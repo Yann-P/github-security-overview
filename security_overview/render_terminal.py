@@ -1,19 +1,26 @@
 import shutil
 
 from .constants import GREY, RESET, PR_STATE_COLORS, STATE_COLORS
-from .render_common import age_t, days_ago, days_between, plasma_rgb, pr_state, repo_name
+from .render_common import (
+    HEADER_COLS,
+    NVD_URL,
+    age_t,
+    days_ago,
+    plasma_rgb,
+    pr_label,
+    pr_state,
+    repo_name,
+    time_to_publish,
+)
 
-# Visible chars per line excluding org/repo/cve/title/PRs:
+# Visible chars per line excluding org/repo/ghsa/cve/title/PRs:
 #   4(created) + 2 + 4(updated) + 2 + 9(state) + 2 = 23
 _FIXED_OVERHEAD = 23
-_NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"
-
-_HEADER_COLS = ["created", "updated", "to-publish", "state", "org", "repo", "cve", "title", "PRs"]
 
 
 def header(redact=False, plain=False):
     """Column names for render_org lines; cli prints this to stderr."""
-    cols = _HEADER_COLS[:6] if redact else _HEADER_COLS
+    cols = HEADER_COLS[:6] if redact else HEADER_COLS
     line = ("\t" if plain else "  ").join(cols)
     return line if plain else _color(line, GREY)
 
@@ -38,7 +45,7 @@ def _age_badge(date_str, text):
 def render_org(org, states, results_by_key, pull_results=None, redact=False, plain=False):
     """One advisory per line (grep/wc -l friendly), headers on stderr only:
 
-    created  updated  [to-publish]  state  org  repo  [cve]  title  [PRs]
+    created  updated  [to-publish]  state  org  repo  [ghsa]  [cve]  title  [PRs]
 
     With plain=True (used when stdout is not a tty), cells are tab-separated
     with no ANSI codes, padding, or truncation, so output pipes cleanly into
@@ -55,22 +62,19 @@ def render_org(org, states, results_by_key, pull_results=None, redact=False, pla
     advisories = sorted(advisories, key=lambda a: a.get("updated_at", ""), reverse=True)
 
     # time-to-publish (published_at - created_at) only applies to published advisories
-    ttps = [
-        days_between(a.get("created_at"), a.get("published_at"))
-        if a.get("state") == "published"
-        else None
-        for a in advisories
-    ]
+    ttps = [time_to_publish(a) for a in advisories]
     ttp_w = max((len(str(t)) for t in ttps if t is not None), default=0)
 
     sep = "\t" if plain else "  "
     org_col = "REDACTED" if redact else org
     repo_w = max(len("REDACTED" if redact else repo_name(a)) for a in advisories)
+    ghsa_w = 0 if redact else max(len(a.get("ghsa_id") or "") for a in advisories)
     cve_w = 0 if redact else max(len(a.get("cve_id") or "") for a in advisories)
     # everything left of the title has fixed width
     base_overhead = (
         _FIXED_OVERHEAD + len(org_col) + 2 + repo_w + 2
         + (ttp_w + 2 if ttp_w else 0)
+        + (ghsa_w + 2 if ghsa_w else 0)
         + (cve_w + 2 if cve_w else 0)
     )
 
@@ -103,13 +107,21 @@ def render_org(org, states, results_by_key, pull_results=None, redact=False, pla
             lines.append(sep.join(cells))
             continue
 
-        if cve_w:
-            cve = advisory.get("cve_id") or ""
-            if plain:
-                cells.append(cve)
-            else:
-                cve_cell = _link(cve, _NVD_URL.format(cve)) if cve else ""
-                cells.append(cve_cell + " " * (cve_w - len(cve)))
+        # plain always emits every column (empty cells included) so awk/cut field
+        # numbers stay put; the tty path drops org-wide empty columns to save width
+        ghsa = advisory.get("ghsa_id") or ""
+        if plain:
+            cells.append(ghsa)
+        elif ghsa_w:
+            ghsa_cell = _link(ghsa, url) if (ghsa and url) else ghsa
+            cells.append(ghsa_cell + " " * (ghsa_w - len(ghsa)))
+
+        cve = advisory.get("cve_id") or ""
+        if plain:
+            cells.append(cve)
+        elif cve_w:
+            cve_cell = _link(cve, NVD_URL.format(cve)) if cve else ""
+            cells.append(cve_cell + " " * (cve_w - len(cve)))
 
         fork = advisory.get("private_fork")
         fork_html_url = fork.get("html_url") if fork else None
@@ -120,14 +132,13 @@ def render_org(org, states, results_by_key, pull_results=None, redact=False, pla
             pr_items = []
             pr_texts = []
             for p in pulls:
-                ps = pr_state(p)
-                label = "opened" if ps == "open" else ps
-                text = f"#{p['number']} ({label})"
+                text = pr_label(p)
                 pr_texts.append(text)
                 if plain:
                     pr_items.append(text)
                 else:
-                    pr_items.append(_color(_link(text, p["html_url"]), PR_STATE_COLORS.get(ps, GREY)))
+                    color = PR_STATE_COLORS.get(pr_state(p), GREY)
+                    pr_items.append(_color(_link(text, p["html_url"]), color))
             pr_cell = "PRs: " + ", ".join(pr_items)
             pr_len = len("PRs: " + ", ".join(pr_texts))
 

@@ -1,5 +1,23 @@
 from datetime import datetime, timezone
 
+# Column set shared by the terminal and md renderers. The md renderer carries
+# org/repo as headings instead of columns, but the rest line up 1:1.
+HEADER_COLS = ["created", "updated", "to-publish", "state", "org", "repo", "ghsa", "cve", "title", "PRs"]
+NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"
+
+
+def time_to_publish(advisory):
+    """Days from creation to publication; None unless the advisory is published."""
+    if advisory.get("state") != "published":
+        return None
+    return days_between(advisory.get("created_at"), advisory.get("published_at"))
+
+
+def pr_label(pull):
+    """`#12 (opened)` — the PR text both renderers show."""
+    state = pr_state(pull)
+    return f"#{pull['number']} ({'opened' if state == 'open' else state})"
+
 
 def pr_state(pull):
     if pull is None:

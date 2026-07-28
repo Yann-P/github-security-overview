@@ -89,6 +89,14 @@ def test_cve_on_same_line():
     assert "nvd.nist.gov" in lines[0]
 
 
+def test_ghsa_on_same_line():
+    out = render_terminal.render_org(ORG, STATES, RESULTS)
+    lines = out.splitlines()
+    assert len(lines) == 1
+    assert "GHSA-1234-5678-abcd" in lines[0]
+    assert ADVISORY["html_url"] in lines[0]
+
+
 def test_pr_on_same_line():
     results = {
         (ORG, "draft"): [{
@@ -146,8 +154,21 @@ def test_plain_tab_separated_columns():
     assert fields[3] == "draft"
     assert fields[4] == "acme"
     assert fields[5] == "repo-x"
-    assert fields[6] == "CVE-2024-9999"
-    assert fields[7] == "Remote code execution via evil input"
+    assert fields[6] == "GHSA-1234-5678-abcd"
+    assert fields[7] == "CVE-2024-9999"
+    assert fields[8] == "Remote code execution via evil input"
+
+
+def test_plain_field_positions_survive_empty_columns():
+    # an org with no GHSA/CVE anywhere must still emit those cells, or the title
+    # slides into their field number and piped awk/cut/datamash reads the wrong column
+    results = {(ORG, "draft"): [{**ADVISORY, "ghsa_id": None, "cve_id": None}]}
+    out = render_terminal.render_org(ORG, STATES, results, plain=True)
+    fields = out.split("\t")
+    title_col = render_terminal.header(plain=True).split("\t").index("title")
+    assert fields[6] == ""
+    assert fields[7] == ""
+    assert fields[title_col] == "Remote code execution via evil input"
 
 
 def test_plain_created_before_updated():
@@ -160,7 +181,7 @@ def test_plain_created_before_updated():
 def test_header_plain():
     h = render_terminal.header(plain=True)
     assert h.split("\t") == [
-        "created", "updated", "to-publish", "state", "org", "repo", "cve", "title", "PRs"
+        "created", "updated", "to-publish", "state", "org", "repo", "ghsa", "cve", "title", "PRs"
     ]
     assert "\033" not in h
 
