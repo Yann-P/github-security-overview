@@ -3,7 +3,23 @@ from datetime import datetime, timezone
 # Column set shared by the terminal and md renderers. The md renderer carries
 # org/repo as headings instead of columns, but the rest line up 1:1.
 HEADER_COLS = ["created", "updated", "to-publish", "state", "org", "repo", "ghsa", "cve", "title", "PRs"]
+# what survives --redact: ages and state, nothing that identifies the advisory
+REDACT_COLS = ["created", "updated", "to-publish", "state", "org", "repo"]
 NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"
+
+
+def select_columns(columns=None, redact=False):
+    """The columns to show, always in HEADER_COLS order.
+
+    `columns` is the --columns allow-list (None means all). Redaction is applied
+    last, so it wins over anything the caller asked for. Both renderers derive
+    their header and their cells from this one list, which is what keeps the two
+    in step and keeps rows matching the header.
+    """
+    cols = HEADER_COLS if columns is None else [c for c in HEADER_COLS if c in columns]
+    if redact:
+        cols = [c for c in cols if c in REDACT_COLS]
+    return cols
 
 
 def time_to_publish(advisory):

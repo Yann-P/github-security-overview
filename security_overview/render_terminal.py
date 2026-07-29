@@ -2,7 +2,6 @@ import shutil
 
 from .constants import GREY, RESET, PR_STATE_COLORS, STATE_COLORS
 from .render_common import (
-    HEADER_COLS,
     NVD_URL,
     age_t,
     days_ago,
@@ -10,19 +9,78 @@ from .render_common import (
     pr_label,
     pr_state,
     repo_name,
+    select_columns,
     time_to_publish,
 )
 
-# Visible chars per line excluding org/repo/ghsa/cve/title/PRs:
-#   4(created) + 2 + 4(updated) + 2 + 9(state) + 2 = 23
-_FIXED_OVERHEAD = 23
+# columns whose cells are always the same width; the rest are measured from the data
+_FIXED_WIDTHS = {"created": 4, "updated": 4, "state": 9}
+_SEP = "  "  # column separator in tty mode; plain mode uses a tab
 
 
-def header(redact=False, plain=False):
+def _pulls_for(advisory, pull_results):
+    fork = advisory.get("private_fork")
+    fork_html_url = fork.get("html_url") if fork else None
+    return (pull_results or {}).get(fork_html_url, []) if fork_html_url else []
+
+
+def _pr_text(pulls):
+    """The uncolored, unlinked PR cell — what it costs in columns."""
+    return "PRs: " + ", ".join(pr_label(p) for p in pulls) if pulls else ""
+
+
+def _visible(cols, widths):
+    """Drop columns nothing fills (no CVE in the whole run, say), to save width."""
+    return [c for c in cols if widths.get(c, 1) > 0]
+
+
+def column_widths(states, results_by_key, pull_results=None, redact=False, columns=None, term_w=None):
+    """Cell widths for one whole run, measured across *every* org.
+
+    Measuring per org would stagger the table: each org would size `repo` (and
+    the rest) to its own longest value, so lines from different orgs wouldn't
+    line up. header() and render_org() share this one dict instead, which is
+    also what lets the header sit over its column. A column measured at 0 stays
+    0 so it can be collapsed; the others are never narrower than their name.
+    """
+    if term_w is None:
+        term_w = shutil.get_terminal_size(fallback=(120, 24)).columns
+
+    advisories, org_cols = [], []
+    for (org, state), found in results_by_key.items():
+        if state not in states or not found:
+            continue
+        org_cols.append("REDACTED" if redact else org)
+        advisories.extend(found)
+    if not advisories:
+        return {}
+
+    ttps = [time_to_publish(a) for a in advisories]
+    widths = {
+        **_FIXED_WIDTHS,
+        "to-publish": max((len(str(t)) for t in ttps if t is not None), default=0),
+        "org": max(len(o) for o in org_cols),
+        "repo": max(len("REDACTED" if redact else repo_name(a)) for a in advisories),
+        "ghsa": max(len(a.get("ghsa_id") or "") for a in advisories),
+        "cve": max(len(a.get("cve_id") or "") for a in advisories),
+        "PRs": max(len(_pr_text(_pulls_for(a, pull_results))) for a in advisories),
+    }
+    shown = _visible(select_columns(columns, redact), widths)
+    widths = {c: max(w, len(c)) if w else 0 for c, w in widths.items()}
+    # title is elastic: it gets whatever the fixed-width columns leave behind
+    overhead = sum(widths[c] + len(_SEP) for c in shown if c in widths)
+    widths["title"] = max(10, term_w - overhead)
+    return widths
+
+
+def header(redact=False, plain=False, columns=None, widths=None):
     """Column names for render_org lines; cli prints this to stderr."""
-    cols = HEADER_COLS[:6] if redact else HEADER_COLS
-    line = ("\t" if plain else "  ").join(cols)
-    return line if plain else _color(line, GREY)
+    cols = select_columns(columns, redact)
+    if plain:
+        return "\t".join(cols)
+    widths = widths or {}
+    line = _SEP.join(c.ljust(widths.get(c, len(c))) for c in _visible(cols, widths)).rstrip()
+    return _color(line, GREY)
 
 
 def _link(text, target):
@@ -42,16 +100,25 @@ def _age_badge(date_str, text):
     return f"{bg}{fg}{text}{RESET}"
 
 
-def render_org(org, states, results_by_key, pull_results=None, redact=False, plain=False):
+def _pad(text, visible_len, width):
+    """Right-pad an already decorated cell, whose escapes don't take columns."""
+    return text + " " * max(0, width - visible_len)
+
+
+def render_org(org, states, results_by_key, pull_results=None, redact=False, plain=False,
+               columns=None, widths=None):
     """One advisory per line (grep/wc -l friendly), headers on stderr only:
 
     created  updated  [to-publish]  state  org  repo  [ghsa]  [cve]  title  [PRs]
+
+    `widths` comes from column_widths() over the whole run; when it isn't passed
+    it is computed here from results_by_key, which holds every org either way,
+    so orgs rendered one call at a time still share one set of columns.
 
     With plain=True (used when stdout is not a tty), cells are tab-separated
     with no ANSI codes, padding, or truncation, so output pipes cleanly into
     cut/awk/datamash.
     """
-    term_w = shutil.get_terminal_size(fallback=(120, 24)).columns
     advisories = []
     for state in states:
         advisories.extend(results_by_key.get((org, state), []))
@@ -60,97 +127,64 @@ def render_org(org, states, results_by_key, pull_results=None, redact=False, pla
         return ""
 
     advisories = sorted(advisories, key=lambda a: a.get("updated_at", ""), reverse=True)
+    cols = select_columns(columns, redact)
+    if not cols:
+        return ""
 
-    # time-to-publish (published_at - created_at) only applies to published advisories
-    ttps = [time_to_publish(a) for a in advisories]
-    ttp_w = max((len(str(t)) for t in ttps if t is not None), default=0)
+    if plain:
+        # every selected column emits, empty or not, so awk/cut field numbers hold
+        sep, shown, widths = "\t", cols, {}
+    else:
+        if not widths:
+            widths = column_widths(states, results_by_key, pull_results, redact, columns)
+        sep, shown = _SEP, _visible(cols, widths)
 
-    sep = "\t" if plain else "  "
     org_col = "REDACTED" if redact else org
-    repo_w = max(len("REDACTED" if redact else repo_name(a)) for a in advisories)
-    ghsa_w = 0 if redact else max(len(a.get("ghsa_id") or "") for a in advisories)
-    cve_w = 0 if redact else max(len(a.get("cve_id") or "") for a in advisories)
-    # everything left of the title has fixed width
-    base_overhead = (
-        _FIXED_OVERHEAD + len(org_col) + 2 + repo_w + 2
-        + (ttp_w + 2 if ttp_w else 0)
-        + (ghsa_w + 2 if ghsa_w else 0)
-        + (cve_w + 2 if cve_w else 0)
-    )
-
     lines = []
-    for advisory, ttp in zip(advisories, ttps):
+    for advisory in advisories:
         url = advisory.get("html_url", "")
         created = advisory.get("created_at", "")
         updated = advisory.get("updated_at", "")
         state_val = advisory.get("state") or "?"
-        repo_col = "REDACTED" if redact else repo_name(advisory)
-        if plain:
-            created_badge = str(days_ago(created))
-            updated_badge = str(days_ago(updated))
-            state_str = state_val
-        else:
-            created_badge = _age_badge(created, days_ago(created))
-            updated_badge = _age_badge(updated, days_ago(updated))
-            state_str = _color(state_val.ljust(9), STATE_COLORS.get(state_val, ""))
-            repo_col = repo_col.ljust(repo_w)
-
-        cells = [created_badge, updated_badge]
-        if plain:
-            # NA (not "") so datamash --narm can skip non-published rows
-            cells.append("NA" if ttp is None else str(ttp))
-        elif ttp_w:
-            cells.append(("" if ttp is None else str(ttp)).rjust(ttp_w))
-        cells += [state_str, org_col, repo_col]
-
-        if redact:
-            lines.append(sep.join(cells))
-            continue
-
-        # plain always emits every column (empty cells included) so awk/cut field
-        # numbers stay put; the tty path drops org-wide empty columns to save width
         ghsa = advisory.get("ghsa_id") or ""
-        if plain:
-            cells.append(ghsa)
-        elif ghsa_w:
-            ghsa_cell = _link(ghsa, url) if (ghsa and url) else ghsa
-            cells.append(ghsa_cell + " " * (ghsa_w - len(ghsa)))
-
         cve = advisory.get("cve_id") or ""
-        if plain:
-            cells.append(cve)
-        elif cve_w:
-            cve_cell = _link(cve, NVD_URL.format(cve)) if cve else ""
-            cells.append(cve_cell + " " * (cve_w - len(cve)))
+        repo_col = "REDACTED" if redact else repo_name(advisory)
+        summary = advisory.get("summary") or ""
+        # time-to-publish (published_at - created_at) only applies to published advisories
+        ttp = time_to_publish(advisory)
+        pulls = _pulls_for(advisory, pull_results)
 
-        fork = advisory.get("private_fork")
-        fork_html_url = fork.get("html_url") if fork else None
-        pulls = (pull_results or {}).get(fork_html_url, []) if fork_html_url else []
-        pr_cell = ""
-        pr_len = 0
-        if pulls:
-            pr_items = []
-            pr_texts = []
-            for p in pulls:
-                text = pr_label(p)
-                pr_texts.append(text)
-                if plain:
-                    pr_items.append(text)
-                else:
-                    color = PR_STATE_COLORS.get(pr_state(p), GREY)
-                    pr_items.append(_color(_link(text, p["html_url"]), color))
-            pr_cell = "PRs: " + ", ".join(pr_items)
-            pr_len = len("PRs: " + ", ".join(pr_texts))
-
+        cell = {}
         if plain:
-            cells.append((advisory.get("summary") or "").replace("\t", " "))
+            cell["created"] = str(days_ago(created))
+            cell["updated"] = str(days_ago(updated))
+            # NA (not "") so datamash --narm can skip non-published rows
+            cell["to-publish"] = "NA" if ttp is None else str(ttp)
+            cell["state"] = state_val
+            cell["org"] = org_col
+            cell["repo"] = repo_col
+            cell["ghsa"] = ghsa
+            cell["cve"] = cve
+            cell["title"] = summary.replace("\t", " ")
+            cell["PRs"] = _pr_text(pulls)
         else:
-            title_w = max(10, term_w - base_overhead - (pr_len + 2 if pr_cell else 0))
-            title = (advisory.get("summary") or "")[:title_w]
-            cells.append(_link(title, url))
-        if pr_cell:
-            cells.append(pr_cell)
+            cell["created"] = _age_badge(created, str(days_ago(created)).rjust(widths["created"]))
+            cell["updated"] = _age_badge(updated, str(days_ago(updated)).rjust(widths["updated"]))
+            cell["to-publish"] = ("" if ttp is None else str(ttp)).rjust(widths["to-publish"])
+            cell["state"] = _color(state_val.ljust(widths["state"]), STATE_COLORS.get(state_val, ""))
+            cell["org"] = org_col.ljust(widths["org"])
+            cell["repo"] = repo_col.ljust(widths["repo"])
+            ghsa_cell = _link(ghsa, url) if (ghsa and url) else ghsa
+            cell["ghsa"] = _pad(ghsa_cell, len(ghsa), widths["ghsa"])
+            cve_cell = _link(cve, NVD_URL.format(cve)) if cve else ""
+            cell["cve"] = _pad(cve_cell, len(cve), widths["cve"])
+            title = summary[:widths["title"]]
+            cell["title"] = _pad(_link(title, url), len(title), widths["title"])
+            cell["PRs"] = ("PRs: " + ", ".join(
+                _color(_link(pr_label(p), p["html_url"]), PR_STATE_COLORS.get(pr_state(p), GREY))
+                for p in pulls
+            )) if pulls else ""
 
-        lines.append(sep.join(cells).rstrip())
+        lines.append(sep.join(cell[c] for c in shown).rstrip())
 
     return "\n".join(lines)

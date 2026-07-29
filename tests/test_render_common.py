@@ -1,7 +1,24 @@
 from datetime import datetime, timezone, timedelta
 from security_overview.render_common import (
-    plasma_rgb, age_t, pr_state, days_ago, group_by_repo,
+    plasma_rgb, age_t, pr_state, days_ago, group_by_repo, select_columns, HEADER_COLS,
 )
+
+
+def test_select_columns_defaults_to_all():
+    assert select_columns() == HEADER_COLS
+
+
+def test_select_columns_keeps_canonical_order():
+    assert select_columns(["title", "created", "state"]) == ["created", "state", "title"]
+
+
+def test_select_columns_ignores_unknown_names():
+    assert select_columns(["created", "bogus"]) == ["created"]
+
+
+def test_select_columns_redact_wins_over_selection():
+    # asking for title under --redact must not resurrect it
+    assert select_columns(["title", "ghsa", "state"], redact=True) == ["state"]
 
 
 def test_plasma_rgb_old():

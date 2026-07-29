@@ -1,4 +1,5 @@
 from security_overview import render_md
+from security_overview.render_common import days_ago
 
 ORG = "acme"
 STATES = ["draft"]
@@ -84,6 +85,21 @@ def test_redact_hides_org():
     out = render_md.render_org(ORG, STATES, RESULTS, redact=True)
     assert "REDACTED ORG" in out
     assert ORG not in out.split("##")[1].split("\n")[0]
+
+
+def test_columns_selects_table_columns():
+    out = render_md.render_org(ORG, STATES, RESULTS, columns=["state", "created", "title"])
+    assert "| created | state | title |" in out
+    assert "| cve |" not in out
+    row = [line for line in out.splitlines() if line.startswith("| ") and "draft" in line][0]
+    assert [c.strip() for c in row.split("|")[1:-1]] == [
+        str(days_ago(ADVISORY["created_at"])), "draft", "Remote code execution via evil input"
+    ]
+
+
+def test_columns_org_repo_only_renders_nothing():
+    # org/repo live in the headings, so a table of just those has no cells to show
+    assert render_md.render_org(ORG, STATES, RESULTS, columns=["org", "repo"]) == ""
 
 
 def test_redact_hides_advisory_details():

@@ -9,6 +9,7 @@ import trio
 from . import render_md, render_terminal
 from .constants import ALL_STATES
 from .fetch import check_token, fetch, fetch_pulls
+from .render_common import HEADER_COLS
 
 RENDERERS = {
     "terminal": render_terminal,
@@ -24,6 +25,16 @@ def parse_states(value):
                 f"invalid state {s!r} (choose from {', '.join(ALL_STATES)})"
             )
     return states
+
+
+def parse_columns(value):
+    cols = [c.strip() for c in value.split(",") if c.strip()]
+    for c in cols:
+        if c not in HEADER_COLS:
+            raise argparse.ArgumentTypeError(
+                f"invalid column {c!r} (choose from {', '.join(HEADER_COLS)})"
+            )
+    return cols
 
 
 def parse_date(value):
@@ -67,6 +78,16 @@ async def main():
         help="filter by state; repeatable and/or comma-separated (default: all states)",
     )
     parser.add_argument(
+        "--columns",
+        type=parse_columns,
+        action="append",
+        metavar="COL[,COL...]",
+        help=(
+            "show only these columns; repeatable and/or comma-separated, always "
+            f"printed in the canonical order (default: all of {', '.join(HEADER_COLS)})"
+        ),
+    )
+    parser.add_argument(
         "--redact",
         action="store_true",
         help="hide org/repo names, GHSA random chars, and drop title + headers",
@@ -103,6 +124,7 @@ async def main():
     )
     args = parser.parse_args()
     states = [s for group in (args.state or []) for s in group] or ALL_STATES
+    columns = [c for group in (args.columns or []) for c in group] or None
     renderer = RENDERERS[args.format]
 
     headers = {
@@ -133,13 +155,22 @@ async def main():
             for fork_url in fork_urls:
                 nursery.start_soon(fetch_pulls, client, fork_url, pull_results)
 
-    render_kwargs = {"pull_results": pull_results, "redact": args.redact}
+    render_kwargs = {"pull_results": pull_results, "redact": args.redact, "columns": columns}
     if args.format == "terminal":
         # tab-separated plain output when piped, so cut/awk/datamash can parse it
         plain = not sys.stdout.isatty()
         render_kwargs["plain"] = plain
+        # one width per column for the whole run: every org and the header line
+        # up in a single table, instead of each org sizing its own columns
+        widths = None if plain else render_terminal.column_widths(
+            states, results, pull_results, args.redact, columns
+        )
+        render_kwargs["widths"] = widths
         # headers go to stderr so stdout stays 1 line = 1 advisory
-        print(render_terminal.header(redact=args.redact, plain=plain), file=sys.stderr)
+        print(
+            render_terminal.header(redact=args.redact, plain=plain, columns=columns, widths=widths),
+            file=sys.stderr,
+        )
     for org in args.orgs:
         out = renderer.render_org(org, states, results, **render_kwargs)
         if out:

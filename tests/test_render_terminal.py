@@ -171,6 +171,28 @@ def test_plain_field_positions_survive_empty_columns():
     assert fields[title_col] == "Remote code execution via evil input"
 
 
+def test_columns_selects_and_orders_fields():
+    # requested out of order; emitted in canonical order
+    out = render_terminal.render_org(ORG, STATES, RESULTS, plain=True, columns=["ghsa", "created"])
+    created, ghsa = out.split("\t")
+    assert created.isdigit()
+    assert ghsa == "GHSA-1234-5678-abcd"
+
+
+def test_columns_header_matches_row_fields():
+    cols = ["created", "state", "ghsa", "title"]
+    header = render_terminal.header(plain=True, columns=cols).split("\t")
+    fields = render_terminal.render_org(ORG, STATES, RESULTS, plain=True, columns=cols).split("\t")
+    assert header == cols
+    assert len(fields) == len(cols)
+    assert fields[header.index("title")] == "Remote code execution via evil input"
+
+
+def test_columns_drop_title_from_output():
+    out = render_terminal.render_org(ORG, STATES, RESULTS, columns=["created", "state"])
+    assert "Remote code execution" not in out
+
+
 def test_plain_created_before_updated():
     out = render_terminal.render_org(ORG, STATES, RESULTS, plain=True)
     created_days, updated_days = out.split("\t")[:2]
@@ -224,6 +246,96 @@ def test_terminal_time_to_publish_column():
 
 def test_terminal_no_ttp_column_without_published():
     assert _visible(render_terminal.render_org(ORG, STATES, RESULTS)).split()[2] == "draft"
+
+
+TWO_ORGS = {
+    ("acme", "draft"): [ADVISORY],
+    ("umbrella-corporation", "draft"): [
+        {
+            **ADVISORY,
+            "ghsa_id": "GHSA-aaaa-bbbb-cccc",
+            "html_url": "https://github.com/umbrella-corporation/a-much-longer-repo/security/advisories/GHSA-aaaa-bbbb-cccc",
+            "cve_id": None,
+        }
+    ],
+}
+
+
+def _columns(line):
+    """Visible start offset of each cell, keyed by the cell's stripped text."""
+    line = _visible(line)
+    return {m.group().strip(): m.start() for m in re.finditer(r"(?:\S+ ?)+", line)}
+
+
+def test_terminal_columns_align_across_orgs():
+    # widths measured per org would size `repo` to each org's longest name and
+    # stagger the two blocks; one width per run keeps them in the same table
+    widths = render_terminal.column_widths(STATES, TWO_ORGS)
+    lines = [
+        render_terminal.render_org(org, STATES, TWO_ORGS, widths=widths)
+        for org in ("acme", "umbrella-corporation")
+    ]
+    assert _columns(lines[0])["GHSA-1234-5678-abcd"] == _columns(lines[1])["GHSA-aaaa-bbbb-cccc"]
+
+
+def test_terminal_columns_align_without_shared_widths():
+    # results_by_key holds every org, so a bare render_org call measures the same
+    lines = [
+        render_terminal.render_org(org, STATES, TWO_ORGS)
+        for org in ("acme", "umbrella-corporation")
+    ]
+    assert _columns(lines[0])["GHSA-1234-5678-abcd"] == _columns(lines[1])["GHSA-aaaa-bbbb-cccc"]
+
+
+def test_terminal_header_sits_over_its_column():
+    widths = render_terminal.column_widths(STATES, TWO_ORGS)
+    header = render_terminal.header(widths=widths)
+    row = render_terminal.render_org("acme", STATES, TWO_ORGS, widths=widths)
+    assert _columns(header)["ghsa"] == _columns(row)["GHSA-1234-5678-abcd"]
+    assert _columns(header)["repo"] == _columns(row)["repo-x"]
+
+
+def test_terminal_pr_column_aligns():
+    fork = {"html_url": "https://github.com/acme/repo-x-private"}
+    results = {
+        (ORG, "draft"): [
+            {**ADVISORY, "private_fork": fork},
+            {**ADVISORY, "ghsa_id": "GHSA-aaaa-bbbb-cccc", "summary": "short", "private_fork": fork},
+        ]
+    }
+    pull_results = {fork["html_url"]: [
+        {"number": 7, "html_url": "https://github.com/acme/repo-x-private/pull/7",
+         "state": "open", "merged_at": None},
+    ]}
+    first, second = render_terminal.render_org(
+        ORG, STATES, results, pull_results=pull_results
+    ).splitlines()
+    # titles differ in length, so the PR cell only lines up if the title is padded
+    assert _visible(first).index("PRs: ") == _visible(second).index("PRs: ")
+
+
+def test_terminal_ages_right_aligned():
+    results = {(ORG, "draft"): [
+        ADVISORY,
+        {**ADVISORY, "created_at": "1999-01-01T00:00:00Z", "updated_at": "2024-05-01T00:00:00Z"},
+    ]}
+    lines = render_terminal.render_org(ORG, STATES, results).splitlines()
+    # a 4-digit age and a 3-digit age must still end in the same column
+    assert len({_visible(line).index("draft") for line in lines}) == 1
+
+
+def test_terminal_dropped_column_dropped_from_header_too():
+    # no CVE anywhere in the run: the cve column disappears from rows *and* header
+    results = {(ORG, "draft"): [{**ADVISORY, "cve_id": None}]}
+    widths = render_terminal.column_widths(STATES, results)
+    assert "cve" not in _visible(render_terminal.header(widths=widths)).split()
+
+
+def test_plain_ignores_widths():
+    widths = render_terminal.column_widths(STATES, TWO_ORGS)
+    out = render_terminal.render_org(ORG, STATES, TWO_ORGS, plain=True, widths=widths)
+    assert out.split("\t")[5] == "repo-x"  # no padding despite the longer repo elsewhere
+    assert "\033" not in out
 
 
 def test_plain_no_ansi_escapes():

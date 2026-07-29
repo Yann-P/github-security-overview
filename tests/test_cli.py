@@ -1,6 +1,6 @@
 import pytest
 import argparse
-from security_overview.cli import filter_date_range, parse_date, parse_states
+from security_overview.cli import filter_date_range, parse_columns, parse_date, parse_states
 
 
 def test_parse_single_state():
@@ -23,6 +23,15 @@ def test_parse_invalid_raises():
 def test_parse_mixed_valid_invalid_raises():
     with pytest.raises(argparse.ArgumentTypeError):
         parse_states("draft,bogus")
+
+
+def test_parse_columns_comma_separated():
+    assert parse_columns("created, ghsa") == ["created", "ghsa"]
+
+
+def test_parse_columns_invalid_raises():
+    with pytest.raises(argparse.ArgumentTypeError, match="invalid column"):
+        parse_columns("titel")
 
 
 def test_parse_date_valid():
