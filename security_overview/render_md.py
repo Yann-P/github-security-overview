@@ -1,59 +1,37 @@
-from .render_common import (
-    NVD_URL,
-    days_ago,
-    group_by_repo,
-    pr_label,
-    select_columns,
-    time_to_publish,
-)
+from .rows import COLUMNS, NVD_URL
 
 
-def _cell(text):
-    """Escape what would otherwise break out of a table cell."""
-    return str(text).replace("|", "\\|").replace("\n", " ")
-
-
-def render_org(org, states, results_by_key, pull_results=None, redact=False, columns=None):
-    advisories = []
-    for state in states:
-        advisories.extend(results_by_key.get((org, state), []))
-
-    if not advisories:
+def render(rows, columns=None):
+    """Markdown: a `##` heading per org, a `###` heading and a table per repo."""
+    # org and repo are headings here, so they never appear as columns
+    cols = [c for c in (COLUMNS if columns is None else columns) if c not in ("org", "repo")]
+    if not rows or not cols:
         return ""
 
-    # org/repo are headings in markdown, so they never appear as columns
-    cols = [c for c in select_columns(columns, redact) if c not in ("org", "repo")]
-    if not cols:
-        return ""
+    # rows arrive newest first, so first-seen order lists the freshest repo first
+    by_repo = {}
+    for row in rows:
+        by_repo.setdefault((row["org"], row["repo"]), []).append(row)
 
     header = "| " + " | ".join(cols) + " |"
     divider = "|" + "|".join("-" * (len(c) + 2) for c in cols) + "|"
-
-    lines = [f"\n## {'REDACTED ORG' if redact else org}"]
-
-    for repo, items in group_by_repo(advisories):
-        items = sorted(items, key=lambda a: a.get("updated_at", ""), reverse=True)
-        lines.append(f"\n### {'REDACTED REPO' if redact else repo}\n")
-        lines.append(header)
-        lines.append(divider)
-        for advisory in items:
-            ttp = time_to_publish(advisory)
-            url = advisory.get("html_url", "")
-            ghsa_id = advisory.get("ghsa_id") or ""
-            cve = advisory.get("cve_id") or ""
-            fork = advisory.get("private_fork")
-            fork_html_url = fork.get("html_url") if fork else None
-            pulls = (pull_results or {}).get(fork_html_url, []) if fork_html_url else []
-            cell = {
-                "created": days_ago(advisory.get("created_at", "")),
-                "updated": days_ago(advisory.get("updated_at", "")),
-                "to-publish": "" if ttp is None else ttp,
-                "state": advisory.get("state") or "?",
-                "ghsa": f"[{ghsa_id}]({url})" if (ghsa_id and url) else ghsa_id,
-                "cve": f"[{cve}]({NVD_URL.format(cve)})" if cve else "",
-                "title": _cell(advisory.get("summary") or ""),
-                "PRs": ", ".join(f"[{pr_label(p)}]({p['html_url']})" for p in pulls),
-            }
-            lines.append("| " + " | ".join(str(cell[c]) for c in cols) + " |")
-
+    lines, current_org = [], None
+    for (org, repo), group in by_repo.items():
+        if org != current_org:
+            current_org = org
+            lines.append(f"\n## {org}")
+        lines += [f"\n### {repo}\n", header, divider]
+        for row in group:
+            lines.append("| " + " | ".join(cell(row, c) for c in cols) + " |")
     return "\n".join(lines)
+
+
+def cell(row, col):
+    """One table cell, linked where there is somewhere to point."""
+    if col == "ghsa" and row["ghsa"] and row["url"]:
+        return f"[{row['ghsa']}]({row['url']})"
+    if col == "cve" and row["cve"]:
+        return f"[{row['cve']}]({NVD_URL.format(row['cve'])})"
+    if col == "PRs":
+        return ", ".join(f"[{p['label']}]({p['url']})" for p in row["pulls"])
+    return row[col].replace("|", r"\|")  # a bare pipe would break out of the cell

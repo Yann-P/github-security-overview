@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import trio
-from security_overview.cli import main
+from security_overview.cli import run
 
-trio.run(main)
+run()

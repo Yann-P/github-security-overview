@@ -27,7 +27,8 @@ advisories and `awk`/`cut`/`datamash` work directly, e.g. `security-overview acm
 ## Options
 
 ```
-usage: security-overview [-h] [--state STATE[,STATE...]] [--redact]
+usage: security-overview [-h] [--state STATE[,STATE...]]
+                         [--columns COL[,COL...]] [--redact]
                          [--format {terminal,md}] [--opened-from YYYY-MM-DD]
                          [--opened-to YYYY-MM-DD]
                          [--published-from YYYY-MM-DD]
@@ -39,8 +40,13 @@ options:
   --state STATE[,STATE...]
                         filter by state; repeatable and/or comma-separated
                         (default: all states)
-  --redact              hide org/repo names, GHSA random chars, and drop title
-                        + headers
+  --columns COL[,COL...]
+                        show only these columns; repeatable and/or comma-
+                        separated, always printed in the canonical order
+                        (default: all of created, updated, to-publish, state,
+                        org, repo, ghsa, cve, title, PRs)
+  --redact              hide org/repo names and drop every column that
+                        identifies an advisory
   --format {terminal,md}
                         output format (default: terminal)
   --opened-from YYYY-MM-DD
