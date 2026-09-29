@@ -59,11 +59,24 @@ def test_no_advisories():
     assert render([]) == ""
 
 
-def test_repos_ordered_by_most_recent_advisory():
+def test_repos_follow_the_row_order():
+    # by default rows are sorted by opened date, most recently opened first
     stale = {**ADVISORY, "html_url": "https://github.com/acme/repo-old/x", "ghsa_id": "GHSA-old",
-             "updated_at": "2024-01-01T00:00:00Z"}
+             "created_at": "2024-01-01T00:00:00Z"}
     headings = [line for line in render(rows(stale, ADVISORY)).splitlines() if line.startswith("###")]
     assert headings == ["### repo-x", "### repo-old"]
+
+
+def test_an_org_keeps_one_heading_when_the_sort_interleaves_orgs():
+    other = {**ADVISORY, "org": "umbrella", "ghsa_id": "GHSA-y",
+             "html_url": "https://github.com/umbrella/repo-y/x", "created_at": "2024-04-01T00:00:00Z"}
+    older = {**ADVISORY, "ghsa_id": "GHSA-z",
+             "html_url": "https://github.com/acme/repo-z/x", "created_at": "2024-03-01T00:00:00Z"}
+    # by opened date alone the orgs alternate: acme, umbrella, acme
+    out = render(build_rows([ADVISORY, other, older], [ORG, "umbrella"], sort=["created"]))
+    assert [line for line in out.splitlines() if line.startswith("## ")] == ["## acme", "## umbrella"]
+    assert [line for line in out.splitlines() if line.startswith("###")] == [
+        "### repo-x", "### repo-z", "### repo-y"]
 
 
 def test_redact_hides_advisory_details():

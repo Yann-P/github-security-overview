@@ -8,15 +8,19 @@ def render(rows, columns=None):
     if not rows or not cols:
         return ""
 
-    # rows arrive newest first, so first-seen order lists the freshest repo first
+    # repos in the order their first advisory appears, so the headings follow the sort
     by_repo = {}
     for row in rows:
         by_repo.setdefault((row["org"], row["repo"]), []).append(row)
+    # a sort that interleaves orgs would print an org heading again on every
+    # switch, so keep each org's repos together (sorted is stable, order holds)
+    org_order = list(dict.fromkeys(org for org, _ in by_repo))
+    groups = sorted(by_repo.items(), key=lambda item: org_order.index(item[0][0]))
 
     header = "| " + " | ".join(cols) + " |"
     divider = "|" + "|".join("-" * (len(c) + 2) for c in cols) + "|"
     lines, current_org = [], None
-    for (org, repo), group in by_repo.items():
+    for (org, repo), group in groups:
         if org != current_org:
             current_org = org
             lines.append(f"\n## {org}")

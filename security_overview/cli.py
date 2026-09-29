@@ -7,7 +7,7 @@ import trio
 
 from . import render_md, render_terminal
 from .fetch import STATES, fetch_advisories, fetch_pulls, github_client
-from .rows import COLUMNS, build_rows, select_columns
+from .rows import COLUMNS, DEFAULT_SORT, build_rows, select_columns
 
 
 def name_list(valid, what):
@@ -58,6 +58,17 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--sort",
+        type=name_list(COLUMNS, "column"),
+        action="append",
+        metavar="COL[,COL...]",
+        help=(
+            "sort by these columns, first one first; repeatable and/or comma-separated. "
+            "Day counts sort smallest (most recent) first, orgs in the order given on "
+            f"the command line, the rest alphabetically (default: {','.join(DEFAULT_SORT)})"
+        ),
+    )
+    parser.add_argument(
         "--redact",
         action="store_true",
         help="hide org/repo names and drop every column that identifies an advisory",
@@ -86,10 +97,11 @@ async def main():
     if not token:
         sys.exit("error: GITHUB_TOKEN environment variable not set")
 
-    # --state and --columns are repeatable, so each one holds a list of lists of names
+    # --state, --columns and --sort are repeatable, so each holds a list of lists of names
     states = [s for group in args.state or [] for s in group] or STATES
     asked_for = [c for group in args.columns or [] for c in group]
     columns = select_columns(asked_for or None, args.redact)
+    sort = [c for group in args.sort or [] for c in group] or DEFAULT_SORT
     date_filters = [
         ("created_at", args.opened_from, args.opened_to),
         ("published_at", args.published_from, args.published_to),
@@ -103,7 +115,7 @@ async def main():
         # after filtering, so we only ask about the forks we are going to print
         await fetch_pulls(client, advisories)
 
-    rows = build_rows(advisories, args.orgs, args.redact)
+    rows = build_rows(advisories, args.orgs, args.redact, sort)
     if args.format == "md":
         markdown = render_md.render(rows, columns)
         if markdown:

@@ -79,23 +79,67 @@ def test_row_title_is_single_line():
     assert build_rows([messy], [ORG])[0]["title"] == "two lines in one title"
 
 
-def test_rows_sorted_by_updated_desc():
-    older = {**ADVISORY, "summary": "older", "updated_at": "2024-01-01T00:00:00Z"}
-    newer = {**ADVISORY, "summary": "newer", "updated_at": "2024-06-01T00:00:00Z"}
+def test_rows_sorted_by_opened_date_by_default():
+    older = {**ADVISORY, "summary": "older", "created_at": "2024-01-01T00:00:00Z"}
+    newer = {**ADVISORY, "summary": "newer", "created_at": "2024-06-01T00:00:00Z"}
     assert [r["title"] for r in build_rows([older, newer], [ORG])] == ["newer", "older"]
 
 
 def test_rows_do_not_depend_on_the_order_advisories_were_fetched_in():
-    # same updated_at: without a tiebreak these would swap places between runs
+    # equal on every sorted column: without a tiebreak these would swap between runs
     first = {**ADVISORY, "ghsa_id": "GHSA-aaaa"}
     second = {**ADVISORY, "ghsa_id": "GHSA-bbbb"}
     assert build_rows([first, second], [ORG]) == build_rows([second, first], [ORG])
 
 
 def test_rows_follow_the_org_order_asked_for():
-    other = {**ADVISORY, "org": "umbrella", "updated_at": "2030-01-01T00:00:00Z"}
+    # umbrella sorts first alphabetically, but acme was asked for first
+    other = {**ADVISORY, "org": "umbrella"}
     rows = build_rows([other, ADVISORY], [ORG, "umbrella"])
     assert [r["org"] for r in rows] == [ORG, "umbrella"]
+
+
+def test_rows_drop_advisories_from_orgs_not_asked_for():
+    assert build_rows([{**ADVISORY, "org": "umbrella"}], [ORG]) == []
+
+
+def test_sort_by_chosen_columns_in_order():
+    a_late = {**ADVISORY, "html_url": "https://github.com/acme/repo-a/x",
+              "created_at": "2024-06-01T00:00:00Z"}
+    b_early = {**ADVISORY, "html_url": "https://github.com/acme/repo-b/x",
+               "created_at": "2024-01-01T00:00:00Z"}
+    rows = build_rows([a_late, b_early], [ORG], sort=["repo", "created"])
+    assert [r["repo"] for r in rows] == ["repo-a", "repo-b"]
+
+
+def test_sort_compares_day_counts_as_numbers():
+    # as text "10" would sort before "9"
+    slow = {**ADVISORY, "ghsa_id": "GHSA-slow", "state": "published",
+            "published_at": "2024-03-11T00:00:00Z"}
+    quick = {**ADVISORY, "state": "published", "published_at": "2024-03-10T00:00:00Z"}
+    rows = build_rows([slow, quick], [ORG], sort=["to-publish"])
+    assert [r["to-publish"] for r in rows] == ["9", "10"]
+
+
+def test_sort_puts_empty_cells_last():
+    no_cve = {**ADVISORY, "ghsa_id": "GHSA-none", "cve_id": None}
+    rows = build_rows([no_cve, ADVISORY], [ORG], sort=["cve"])
+    assert [r["cve"] for r in rows] == ["CVE-2024-9999", ""]
+
+
+def test_sort_puts_unknown_ages_last():
+    undated = {**ADVISORY, "ghsa_id": "GHSA-undated", "created_at": ""}
+    rows = build_rows([undated, ADVISORY], [ORG], sort=["created"])
+    assert [r["ghsa"] for r in rows] == ["GHSA-1234-5678-abcd", "GHSA-undated"]
+
+
+def test_sort_ignores_columns_redact_hides():
+    # ordering by title would rank the rows by what --redact refuses to print;
+    # "Aaa" would come first by title, but it is the older of the two
+    quiet = {**ADVISORY, "ghsa_id": "GHSA-quiet", "summary": "Aaa",
+             "created_at": "2024-01-01T00:00:00Z"}
+    rows = build_rows([quiet, ADVISORY], [ORG], redact=True, sort=["title"])
+    assert [r["ghsa"] for r in rows] == ["GHSA-1234-5678-abcd", "GHSA-quiet"]
 
 
 def test_rows_redact_org_and_repo():
