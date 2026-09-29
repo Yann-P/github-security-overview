@@ -1,13 +1,15 @@
 from datetime import datetime, timezone
 
 # Every column, in the order they are printed; --columns picks from these.
-COLUMNS = ["created", "updated", "to-publish", "state", "org", "repo",
+COLUMNS = ["created", "updated", "to-publish", "state", "severity", "org", "repo",
            "ghsa", "cve", "title", "PRs"]
 # What survives --redact: ages and state, nothing that identifies the advisory.
-PUBLIC_COLUMNS = ["created", "updated", "to-publish", "state", "org", "repo"]
+PUBLIC_COLUMNS = ["created", "updated", "to-publish", "state", "severity", "org", "repo"]
 # Columns holding a number of days; they sort as numbers, so 9 comes before 10.
 NUMERIC_COLUMNS = ("created", "updated", "to-publish")
 DEFAULT_SORT = ["created", "org", "repo"]
+# Severities sort worst first rather than alphabetically.
+SEVERITIES = ["critical", "high", "medium", "low"]
 NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"
 
 
@@ -50,11 +52,14 @@ def sort_cell(row, column):
     """How one column compares under --sort.
 
     Day counts compare as numbers, orgs in the order they were asked for on the
-    command line, everything else alphabetically; empty cells ("", "?") last.
+    command line, severities worst first, everything else alphabetically; empty
+    cells ("", "?") last.
     """
     if column == "org":
         return (0, row["org_rank"])
     value = row[column]
+    if column == "severity":
+        return (0, SEVERITIES.index(value)) if value in SEVERITIES else (1, value)
     if column in NUMERIC_COLUMNS:
         return (1, 0) if value in ("", "?") else (0, int(value))
     return (1, "") if value == "" else (0, value)
@@ -93,6 +98,7 @@ def build_rows(advisories, orgs, redact=False, sort=None):
             "updated": "?" if updated_age is None else str(updated_age),
             "to-publish": str(to_publish),
             "state": advisory.get("state") or "?",
+            "severity": advisory.get("severity") or "",
             "org": "REDACTED" if redact else org,
             "repo": "REDACTED" if redact else repo_name(advisory),
             "ghsa": advisory.get("ghsa_id") or "",

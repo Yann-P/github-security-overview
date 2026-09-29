@@ -64,8 +64,9 @@ def parse_args():
         metavar="COL[,COL...]",
         help=(
             "sort by these columns, first one first; repeatable and/or comma-separated. "
-            "Day counts sort smallest (most recent) first, orgs in the order given on "
-            f"the command line, the rest alphabetically (default: {','.join(DEFAULT_SORT)})"
+            "Day counts sort smallest (most recent) first, severities worst first, orgs "
+            "in the order given on the command line, the rest alphabetically "
+            f"(default: {','.join(DEFAULT_SORT)})"
         ),
     )
     parser.add_argument(

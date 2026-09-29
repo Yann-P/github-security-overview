@@ -11,6 +11,7 @@ ADVISORY = {
     "summary": "Remote code execution via evil input",
     "state": "draft",
     "cve_id": "CVE-2024-9999",
+    "severity": "high",
 }
 
 
@@ -30,14 +31,16 @@ def test_org_and_repo_headings():
 
 def test_table_header_omits_org_and_repo_columns():
     # org/repo are headings in markdown, so they are not repeated as columns
-    assert "| created | updated | to-publish | state | ghsa | cve | title | PRs |" in render(rows())
+    assert "| created | updated | to-publish | state | severity | ghsa | cve | title | PRs |" in render(rows())
 
 
 def test_row_cells():
-    created, updated, ttp, state = [c.strip() for c in row_for(render(rows())).split("|")[1:5]]
+    cells = [c.strip() for c in row_for(render(rows())).split("|")[1:6]]
+    created, updated, ttp, state, severity = cells
     assert int(created) > int(updated) > 0
     assert ttp == ""  # draft advisories have no time-to-publish
     assert state == "draft"
+    assert severity == "high"
 
 
 def test_time_to_publish_for_published_advisory():
@@ -86,7 +89,7 @@ def test_redact_hides_advisory_details():
                  "acme", "repo-x"):
         assert leak not in out
     assert "## REDACTED" in out
-    assert "| created | updated | to-publish | state |" in out
+    assert "| created | updated | to-publish | state | severity |" in out
 
 
 def test_columns_selects_table_columns():

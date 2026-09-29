@@ -10,6 +10,12 @@ STATE_COLORS = {
     "published": "\033[32m",
     "closed":    GREY,
 }
+SEVERITY_COLORS = {
+    "critical": "\033[1;31m",
+    "high":     "\033[31m",
+    "medium":   "\033[33m",
+    "low":      GREY,
+}
 PULL_COLORS = {
     "open":   "\033[32m",
     "merged": "\033[35m",
@@ -88,6 +94,8 @@ def styled(row, col, width):
         return age_badge(row[col + "_age"], text)
     if col == "state":
         return STATE_COLORS.get(row["state"], "") + text + pad + RESET
+    if col == "severity":
+        return SEVERITY_COLORS.get(row["severity"], "") + text + pad + RESET
     if col in ("ghsa", "title") and text and row["url"]:
         return link(text, row["url"]) + pad
     if col == "cve" and text:

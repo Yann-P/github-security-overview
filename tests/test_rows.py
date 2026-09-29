@@ -12,6 +12,7 @@ ADVISORY = {
     "summary": "Remote code execution via evil input",
     "state": "draft",
     "cve_id": "CVE-2024-9999",
+    "severity": "high",
 }
 
 
@@ -55,6 +56,7 @@ def test_pull_summary_merged():
 def test_row_columns():
     row = build_rows([ADVISORY], [ORG])[0]
     assert row["state"] == "draft"
+    assert row["severity"] == "high"
     assert row["org"] == ORG
     assert row["repo"] == "repo-x"
     assert row["ghsa"] == "GHSA-1234-5678-abcd"
@@ -119,6 +121,18 @@ def test_sort_compares_day_counts_as_numbers():
     quick = {**ADVISORY, "state": "published", "published_at": "2024-03-10T00:00:00Z"}
     rows = build_rows([slow, quick], [ORG], sort=["to-publish"])
     assert [r["to-publish"] for r in rows] == ["9", "10"]
+
+
+def test_row_without_severity():
+    assert build_rows([{**ADVISORY, "severity": None}], [ORG])[0]["severity"] == ""
+
+
+def test_sort_puts_worst_severity_first():
+    # alphabetically "critical" < "high" < "low" < "medium"; worst first instead
+    advisories = [{**ADVISORY, "ghsa_id": f"GHSA-{s or 'none'}", "severity": s}
+                  for s in ("low", None, "medium", "critical", "high")]
+    rows = build_rows(advisories, [ORG], sort=["severity"])
+    assert [r["severity"] for r in rows] == ["critical", "high", "medium", "low", ""]
 
 
 def test_sort_puts_empty_cells_last():

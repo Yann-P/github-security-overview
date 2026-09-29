@@ -13,6 +13,7 @@ ADVISORY = {
     "summary": "Remote code execution via evil input",
     "state": "draft",
     "cve_id": "CVE-2024-9999",
+    "severity": "high",
 }
 PULL = {"number": 7, "html_url": "https://github.com/acme/repo-x-private/pull/7",
         "state": "open", "merged_at": None}
@@ -42,12 +43,12 @@ def test_one_line_per_advisory():
 def test_no_advisories():
     header, lines = render([])
     assert lines == []
-    assert visible(header).split() == ["created", "updated", "to-publish", "state", "org",
-                                       "repo", "ghsa", "cve", "title", "PRs"]
+    assert visible(header).split() == ["created", "updated", "to-publish", "state",
+                                       "severity", "org", "repo", "ghsa", "cve", "title", "PRs"]
 
 
 def test_org_repo_and_title_on_every_line():
-    _, lines = render(rows())
+    _, lines = render(rows(), term_width=200)
     assert "acme" in lines[0]
     assert "repo-x" in lines[0]
     assert "Remote code execution via evil input" in lines[0]
@@ -145,12 +146,12 @@ def test_title_truncated_to_the_terminal_width():
 def test_plain_tab_separated_columns():
     header, lines = render(rows(), plain=True)
     fields = lines[0].split("\t")
-    assert header.split("\t") == ["created", "updated", "to-publish", "state", "org",
-                                  "repo", "ghsa", "cve", "title", "PRs"]
+    assert header.split("\t") == ["created", "updated", "to-publish", "state",
+                                  "severity", "org", "repo", "ghsa", "cve", "title", "PRs"]
     assert fields[0].isdigit()
     assert fields[1].isdigit()
     assert fields[2] == "NA"  # time-to-publish: this advisory is a draft
-    assert fields[3:9] == ["draft", "acme", "repo-x", "GHSA-1234-5678-abcd", "CVE-2024-9999",
+    assert fields[3:10] == ["draft", "high", "acme", "repo-x", "GHSA-1234-5678-abcd", "CVE-2024-9999",
                            "Remote code execution via evil input"]
     assert "\033" not in header + lines[0]
 
@@ -160,7 +161,7 @@ def test_plain_field_positions_survive_empty_columns():
     # slides into their field number and piped awk/cut/datamash reads the wrong column
     header, lines = render(rows({**ADVISORY, "ghsa_id": None, "cve_id": None}), plain=True)
     fields = lines[0].split("\t")
-    assert fields[6:8] == ["", ""]
+    assert fields[7:9] == ["", ""]
     assert fields[header.split("\t").index("title")] == "Remote code execution via evil input"
 
 
@@ -177,6 +178,7 @@ def test_plain_pr_cell():
 
 def test_plain_redact():
     header, lines = render(rows(redact=True), select_columns(redact=True), plain=True)
-    assert header.split("\t") == ["created", "updated", "to-publish", "state", "org", "repo"]
-    assert lines[0].split("\t")[4:] == ["REDACTED", "REDACTED"]
+    assert header.split("\t") == ["created", "updated", "to-publish", "state", "severity",
+                                  "org", "repo"]
+    assert lines[0].split("\t")[5:] == ["REDACTED", "REDACTED"]
     assert "\033" not in lines[0]

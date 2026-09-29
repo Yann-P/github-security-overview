@@ -13,14 +13,15 @@ The token needs `security_events` read access.
 
 ```
 $ security-overview acme
-created  updated  to-publish  state      org   repo    cve            title
-     12        0              draft      acme  repo-a  CVE-2026-xxxx  Arbitrary File Read via Path Traversal
-    232        9           6  published  acme  repo-c  CVE-2025-xxxx  Pwn Request via misconfigured workflow
-    233      107              draft      acme  repo-b                 Path Traversal in Assignment Validation  PRs: #7 (opened)
-    116      116              triage     acme  repo-c                 Authentication Token Theft via XSS
+created  updated  to-publish  state      severity  org   repo    cve            title
+     12        0              draft      high      acme  repo-a  CVE-2026-xxxx  Arbitrary File Read via Path Traversal
+    116      116              triage     medium    acme  repo-c                 Authentication Token Theft via XSS
+    232        9           6  published  critical  acme  repo-c  CVE-2025-xxxx  Pwn Request via misconfigured workflow
+    233      107              draft      high      acme  repo-b                 Path Traversal in Assignment Validation  PRs: #7 (opened)
 ```
 
-Ages are in days; `to-publish` is the time from open to publication. The header goes to
+Ages are in days; `to-publish` is the time from open to publication. Advisories come most
+recently opened first, unless `--sort` says otherwise. The header goes to
 stderr, and when stdout is piped the columns are tab-separated — so `wc -l` counts
 advisories and `awk`/`cut`/`datamash` work directly, e.g. `security-overview acme | datamash --narm median 3`.
 
@@ -28,9 +29,9 @@ advisories and `awk`/`cut`/`datamash` work directly, e.g. `security-overview acm
 
 ```
 usage: security-overview [-h] [--state STATE[,STATE...]]
-                         [--columns COL[,COL...]] [--redact]
-                         [--format {terminal,md}] [--opened-from YYYY-MM-DD]
-                         [--opened-to YYYY-MM-DD]
+                         [--columns COL[,COL...]] [--sort COL[,COL...]]
+                         [--redact] [--format {terminal,md}]
+                         [--opened-from YYYY-MM-DD] [--opened-to YYYY-MM-DD]
                          [--published-from YYYY-MM-DD]
                          [--published-to YYYY-MM-DD]
                          org [org ...]
@@ -44,7 +45,12 @@ options:
                         show only these columns; repeatable and/or comma-
                         separated, always printed in the canonical order
                         (default: all of created, updated, to-publish, state,
-                        org, repo, ghsa, cve, title, PRs)
+                        severity, org, repo, ghsa, cve, title, PRs)
+  --sort COL[,COL...]   sort by these columns, first one first; repeatable
+                        and/or comma-separated. Day counts sort smallest (most
+                        recent) first, severities worst first, orgs in the
+                        order given on the command line, the rest
+                        alphabetically (default: created,org,repo)
   --redact              hide org/repo names and drop every column that
                         identifies an advisory
   --format {terminal,md}
